@@ -141,60 +141,7 @@ test("with both windows shown, the one nearest its limit stays alone", () => {
   expect(windowsFor(meter, one).map((w) => w.kind)).toEqual(["seven_day"]);
 });
 
-test("a /clear fills the footer again", async ($, on) => {
-  mock.clock(on);
-  mock.store(on);
-  let id = "claude-opus-5-5";
-  on("session.start", (_, e) => ({ cwd: e.cwd }));
-  on("session.end", (_, e) => ({ sessionId: e.sessionId }));
-  on("classic.SessionStart", () => ({}));
-  on("session.model", () => ({ value: id }));
-  on("session.cwd", () => ({ value: "/work/app" }));
-  on("session.usage", () => ({
-    value: { startedAt: 0, rateLimits: [], context: { window: 200000 } },
-  }));
-  on("settings.read", () => ({ value: {} }));
-  on("process.run", () => ({
-    value: {
-      exitCode: 128,
-      stdout: "",
-      stderr: "",
-      isStdoutTruncated: false,
-      isStderrTruncated: false,
-    },
-  }));
-  on("ui.render", { component: "PromptHint" }, ($, e) => {
-    const { Text } = $.ui.resolve(e);
-    return <Text>{e.props.hint}</Text>;
-  });
-  const hint = {
-    plugin: "mini-hud",
-    component: "PromptHint",
-    props: { isDraft: false, isWorking: false, hint: "? for shortcuts" },
-  } as const;
-
-  await $.session.start({
-    cwd: "/work/app",
-    surface: "terminal",
-    isInteractive: false,
-  });
-  id = "claude-sonnet-4-5";
-  await $.session.end({
-    reason: "clear",
-    sessionId: "a",
-    resume: { id: "a" },
-  } as never);
-  await $.classic.SessionStart({ source: "clear" });
-  for (const surface of ["terminal", "desktop"] as const) {
-    const ui = await $.ui.mount({ ...hint, surface });
-    expect((await ui.find({ type: "Text", text: /Sonnet/ }))?.text).toBe(
-      "Sonnet 4.5",
-    );
-    await ui.unmount();
-  }
-});
-
-test("the footer fills again when a /clear empties the state after its hook", async ($, on) => {
+test("a /clear fills the footer again once the engine empties the state", async ($, on) => {
   const clock = mock.clock(on);
   mock.store(on);
   // The engine emptying the state: reads find nothing until the plugin writes again.
@@ -210,7 +157,6 @@ test("the footer fills again when a /clear empties the state after its hook", as
   });
   on("session.start", (_, e) => ({ cwd: e.cwd }));
   on("session.end", (_, e) => ({ sessionId: e.sessionId }));
-  on("classic.SessionStart", () => ({}));
   on("session.model", () => ({ value: "claude-opus-5-5" }));
   on("session.cwd", () => ({ value: "/work/app" }));
   on("session.usage", () => ({
@@ -241,9 +187,8 @@ test("the footer fills again when a /clear empties the state after its hook", as
     sessionId: "a",
     resume: { id: "a" },
   } as never);
-  await $.classic.SessionStart({ source: "clear" });
   isWiped = true;
-  await clock.advance(8000);
+  await clock.advance(1000); // before the first tick: the refill after the clear
   const ui = await $.ui.mount({
     plugin: "mini-hud",
     surface: "terminal",

@@ -600,14 +600,14 @@ export const register: Register = (on, options) => {
   });
 
   // A /clear ends the session and goes on under a new one with no session.start and its state
-  // empty: without this the footer stays blank, the timers stopped and the caches above unchanged.
-  on("classic.SessionStart", async ($, e, next) => {
-    if (e.source === "clear") await start($, show, rotateMs);
-    return next(e);
-  });
-
+  // emptied once this has run: the timers keep going and refill the footer (refill), a moment
+  // after the clear and again on each tick and request, whatever this misses.
   on("session.end", ($, e, next) => {
-    if (e.reason === "clear") return next(e); // the process goes on: the timers refill the footer
+    if (e.reason === "clear") {
+      // shortcut: a fixed wait, as no event marks the new session (classic.SessionStart may be passed over by another plugin).
+      $.clock.after(1000, () => void refill($, show, rotateMs).catch(() => {}));
+      return next(e);
+    }
     tickTimer?.cancel();
     tickTimer = undefined;
     rotateTimer?.cancel();

@@ -1,6 +1,6 @@
 {
   "name": "mini-hud",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "A minimal HUD in the prompt footer: model, effort, folder and git branch, context bar, and subscription usage (5-hour and weekly), rotating, side by side or one alone.",
   "author": {
     "name": "Jaime9745",
