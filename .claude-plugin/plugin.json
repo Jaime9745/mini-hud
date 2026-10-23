@@ -1,0 +1,45 @@
+{
+  "name": "mini-hud",
+  "version": "0.1.0",
+  "description": "Model, effort and subscription usage (5-hour and weekly) at the bottom right: rotating, side by side or one alone.",
+  "author": {
+    "name": "Jaime9745",
+    "url": "https://github.com/Jaime9745"
+  },
+  "repository": "https://github.com/Jaime9745/mini-hud",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "display": {
+      "type": "string",
+      "title": "What the usage meter shows",
+      "description": "rotate: one window at a time, alternating. both: 5-hour and weekly side by side. session: only the 5-hour window. week: only the weekly window.",
+      "options": [
+        "rotate",
+        "both",
+        "session",
+        "week"
+      ],
+      "default": "rotate"
+    },
+    "rotateSeconds": {
+      "type": "number",
+      "title": "Seconds per window",
+      "description": "How long each window shows before switching. Only used when display is rotate.",
+      "default": 8,
+      "min": 1
+    },
+    "hideCycleHint": {
+      "type": "boolean",
+      "title": "Hide \"(shift+tab to cycle)\"",
+      "description": "Leaves more room for the meter.",
+      "default": true
+    },
+    "hideInterruptHint": {
+      "type": "boolean",
+      "title": "Hide \"esc to interrupt\"",
+      "description": "Leaves more room for the meter while Claude works.",
+      "default": true
+    }
+  }
+}
