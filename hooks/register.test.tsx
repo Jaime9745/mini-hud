@@ -205,3 +205,40 @@ test("a /clear fills the footer again once the engine empties the state", async 
     resume: { id: "b" },
   } as never);
 });
+
+test("an /effort shows at once, before the next request", async ($, on) => {
+  mock.clock(on);
+  mock.store(on);
+  let effort = "medium";
+  on("session.start", (_, e) => ({ cwd: e.cwd }));
+  on("session.model", () => ({ value: "claude-opus-5-5" }));
+  on("session.cwd", () => ({ value: "/work/app" }));
+  on("session.usage", () => ({
+    value: { startedAt: 0, rateLimits: [], context: { window: 200000 } },
+  }));
+  on("settings.read", () => ({
+    value: { modelSettings: { "claude-opus-5-5": { effortLevel: effort } } },
+  }));
+  on("process.run", () => ({
+    value: { exitCode: 128, stdout: "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false },
+  }));
+  on("command.run", () => {
+    effort = "high"; // the command writes the settings
+    return { text: "" };
+  });
+  on("ui.render", { component: "PromptHint" }, ($, e) => {
+    const { Text } = $.ui.resolve(e);
+    return <Text>{e.props.hint}</Text>;
+  });
+
+  await $.session.start({ cwd: "/work/app", surface: "terminal", isInteractive: false });
+  await $.command.run({ command: "effort", args: "high" } as never);
+  const ui = await $.ui.mount({
+    plugin: "mini-hud",
+    surface: "terminal",
+    component: "PromptHint",
+    props: { isDraft: false, isWorking: false, hint: "? for shortcuts" },
+  });
+  expect((await ui.find({ type: "Text", text: /^(medium|high)$/ }))?.text).toBe("high");
+  await ui.unmount();
+});

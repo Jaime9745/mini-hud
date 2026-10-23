@@ -469,6 +469,32 @@ async function rowOf(
 }
 
 let isInteractive = false;
+// The effort the settings gave when last read: shown only when it changes there, so a request's
+// own effort (turn.step, after any downgrade for the model) is not overwritten on every tick.
+let lastSettingsEffort = "";
+
+/** The effort the settings give a model: its own (`/effort` writes it there), else the global one. */
+const effortOf = (perModel: unknown, level: unknown, id: string) =>
+  String(
+    (perModel as Record<string, { effortLevel?: unknown }> | undefined)?.[id]
+      ?.effortLevel ??
+      level ??
+      "",
+  );
+
+/** Model and effort as the session and the settings have them now: after /model or /effort, and on each tick. */
+async function syncChoice($: EngineInterface) {
+  const [id, perModel, level] = await Promise.all([
+    $.session.model(),
+    $.settings.read({ key: "modelSettings" }),
+    $.settings.read({ key: "effortLevel" }),
+  ]);
+  const effort = effortOf(perModel, level, id);
+  if (id === lastSessionModel && effort === lastSettingsEffort) return;
+  lastSessionModel = id;
+  lastSettingsEffort = effort;
+  await showModel($, id, effort);
+}
 
 /** Fills the footer for a session that starts (or a /clear) and starts its timers. */
 async function start($: EngineInterface, show: Show, rotateMs: number) {
@@ -498,18 +524,15 @@ async function start($: EngineInterface, show: Show, rotateMs: number) {
   }
 
   // Before the first request: the session's model, and the effort the settings give it.
-  // shortcut: an effort set with /effort shows from the next request on, as turn.step carries it.
   lastModel = lastEffort = "";
   lastSessionModel = sessionModel;
-  const own = (
-    perModel as Record<string, { effortLevel?: unknown }> | undefined
-  )?.[lastSessionModel]?.effortLevel;
+  lastSettingsEffort = effortOf(perModel, level, sessionModel);
   compactFor = "";
   lastFill = null;
   isCounting = false;
   await Promise.all([
     remember($, found),
-    showModel($, lastSessionModel, String(own ?? level ?? "")),
+    showModel($, lastSessionModel, lastSettingsEffort),
   ]);
   // The window estimate is not waited on either: the fill shows when it is in.
   void syncContext($, usage.context).catch(() => {});
@@ -519,15 +542,8 @@ async function start($: EngineInterface, show: Show, rotateMs: number) {
   tickTimer = $.clock.every(TICK_MS, () => {
     void refill($, show, rotateMs).catch(() => {});
     void syncFromStore($).catch(() => {}); // a failed read keeps the reading on screen
-    // A /model switch shows before the next request does.
-    void $.session
-      .model()
-      .then((id) => {
-        if (id === lastSessionModel) return;
-        lastSessionModel = id;
-        return showModel($, id, lastEffort);
-      })
-      .catch(() => {});
+    // A /model or /effort the command hook missed (a picker still open when it ran).
+    void syncChoice($).catch(() => {});
     // A resume, a rewind, a compaction or a /model switch moves the fill without a measurement.
     void $.session
       .usage()
@@ -625,6 +641,13 @@ export const register: Register = (on, options) => {
         e.effort === undefined ? "" : String(e.effort),
       );
     return yield* next(e);
+  });
+
+  // /effort and /model write the settings and the session's model: shown as soon as they ran.
+  on("command.run", { command: ["effort", "model"] }, async ($, e, next) => {
+    const result = await next(e);
+    await syncChoice($).catch(() => {});
+    return result;
   });
 
   // A turn that committed, switched branch or moved the session shows at once.
