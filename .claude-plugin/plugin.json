@@ -1,6 +1,6 @@
 {
   "name": "mini-hud",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A minimal HUD in the prompt footer: model, effort, folder and git branch, context bar, and subscription usage (5-hour and weekly), rotating, side by side or one alone.",
   "author": {
     "name": "Jaime9745",
@@ -44,12 +44,7 @@
       "type": "string",
       "title": "What the usage meter shows",
       "description": "rotate: one window at a time, alternating. both: 5-hour and weekly side by side. session: only the 5-hour window. week: only the weekly window.",
-      "options": [
-        "rotate",
-        "both",
-        "session",
-        "week"
-      ],
+      "options": ["rotate", "both", "session", "week"],
       "default": "rotate"
     },
     "rotateSeconds": {
