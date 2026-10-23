@@ -56,8 +56,6 @@ claude plugin install mini-hud --marketplace Jaime9745/mini-hud
 
 In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `Jaime9745/mini-hud`, then Add plugin.
 
-This repository is private: installing needs read access on GitHub and a git credential for github.com on your machine (an SSH key, or `gh auth login` then `gh auth setup-git`).
-
 ## Credits
 
 Based on [sub-meter](https://github.com/midudev/better-claude/tree/main/plugins/sub-meter) by midudev (MIT).
