@@ -15,17 +15,17 @@ The context bar turns yellow from 50% and red from 75%. A `~` before the percent
 
 Run `/mini-hud:configure`: it asks what to show and writes the options for you. The options:
 
-| Option | Default | |
-| --- | --- | --- |
-| `showModel` | `true` | the model |
-| `showEffort` | `true` | the effort level |
-| `showGit` | `true` | folder + git branch |
-| `showContext` | `true` | context bar + % |
-| `showUsage` | `true` | subscription usage at the right |
-| `display` | `rotate` | see below |
-| `rotateSeconds` | `8` | seconds per window when rotating |
-| `hideCycleHint` | `true` | hide "(shift+tab to cycle)" |
-| `hideInterruptHint` | `true` | hide "esc to interrupt" |
+| Option              | Default  |                                  |
+| ------------------- | -------- | -------------------------------- |
+| `showModel`         | `true`   | the model                        |
+| `showEffort`        | `true`   | the effort level                 |
+| `showGit`           | `true`   | folder + git branch              |
+| `showContext`       | `true`   | context bar + %                  |
+| `showUsage`         | `true`   | subscription usage at the right  |
+| `display`           | `rotate` | see below                        |
+| `rotateSeconds`     | `8`      | seconds per window when rotating |
+| `hideCycleHint`     | `true`   | hide "(shift+tab to cycle)"      |
+| `hideInterruptHint` | `true`   | hide "esc to interrupt"          |
 
 ## Display modes
 

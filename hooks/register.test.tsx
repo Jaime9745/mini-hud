@@ -193,3 +193,70 @@ test("a /clear fills the footer again", async ($, on) => {
     await ui.unmount();
   }
 });
+
+test("the footer fills again when a /clear empties the state after its hook", async ($, on) => {
+  const clock = mock.clock(on);
+  mock.store(on);
+  // The engine emptying the state: reads find nothing until the plugin writes again.
+  let isWiped = false;
+  on("state.get", async (_, e, next) => {
+    const read = await next(e);
+    if (!isWiped || read.value === undefined) return read;
+    return { value: { value: undefined, version: read.value.version } };
+  });
+  on("state.set", (_, e, next) => {
+    isWiped = false;
+    return next(e);
+  });
+  on("session.start", (_, e) => ({ cwd: e.cwd }));
+  on("session.end", (_, e) => ({ sessionId: e.sessionId }));
+  on("classic.SessionStart", () => ({}));
+  on("session.model", () => ({ value: "claude-opus-5-5" }));
+  on("session.cwd", () => ({ value: "/work/app" }));
+  on("session.usage", () => ({
+    value: { startedAt: 0, rateLimits: [], context: { window: 200000 } },
+  }));
+  on("settings.read", () => ({ value: {} }));
+  on("process.run", () => ({
+    value: {
+      exitCode: 128,
+      stdout: "",
+      stderr: "",
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }));
+  on("ui.render", { component: "PromptHint" }, ($, e) => {
+    const { Text } = $.ui.resolve(e);
+    return <Text>{e.props.hint}</Text>;
+  });
+
+  await $.session.start({
+    cwd: "/work/app",
+    surface: "terminal",
+    isInteractive: true,
+  });
+  await $.session.end({
+    reason: "clear",
+    sessionId: "a",
+    resume: { id: "a" },
+  } as never);
+  await $.classic.SessionStart({ source: "clear" });
+  isWiped = true;
+  await clock.advance(8000);
+  const ui = await $.ui.mount({
+    plugin: "mini-hud",
+    surface: "terminal",
+    component: "PromptHint",
+    props: { isDraft: false, isWorking: false, hint: "? for shortcuts" },
+  });
+  expect((await ui.find({ type: "Text", text: /Opus/ }))?.text).toBe(
+    "Opus 5.5",
+  );
+  await ui.unmount();
+  await $.session.end({
+    reason: "other",
+    sessionId: "b",
+    resume: { id: "b" },
+  } as never);
+});

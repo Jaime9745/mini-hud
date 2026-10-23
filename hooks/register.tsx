@@ -517,6 +517,7 @@ async function start($: EngineInterface, show: Show, rotateMs: number) {
   if (!isInteractive) return;
   // Another session's reading shows up within TICK_MS of being stored.
   tickTimer = $.clock.every(TICK_MS, () => {
+    void refill($, show, rotateMs).catch(() => {});
     void syncFromStore($).catch(() => {}); // a failed read keeps the reading on screen
     // A /model switch shows before the next request does.
     void $.session
@@ -540,6 +541,15 @@ async function start($: EngineInterface, show: Show, rotateMs: number) {
       if (windowCount >= 2) void update($, view, (n) => n + 1);
     });
   }
+}
+
+/**
+ * Fills the footer again when the state was emptied under the module (a /clear), whatever order
+ * the engine ran that in: the model is written at every start, so an empty one means it was lost.
+ */
+async function refill($: EngineInterface, show: Show, rotateMs: number) {
+  if (lastModel === "" || (await read($, model)) !== "") return;
+  await start($, show, rotateMs);
 }
 
 export const register: Register = (on, options) => {
@@ -597,6 +607,7 @@ export const register: Register = (on, options) => {
   });
 
   on("session.end", ($, e, next) => {
+    if (e.reason === "clear") return next(e); // the process goes on: the timers refill the footer
     tickTimer?.cancel();
     tickTimer = undefined;
     rotateTimer?.cancel();
@@ -606,6 +617,7 @@ export const register: Register = (on, options) => {
 
   // Each request of the main loop names the model and effort it is really sent with.
   on("turn.step", async function* ($, e, next) {
+    if (e.agentId === undefined) await refill($, show, rotateMs);
     if (e.agentId === undefined)
       await showModel(
         $,
