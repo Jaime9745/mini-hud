@@ -1,14 +1,55 @@
 // Based on sub-meter by midudev (MIT): https://github.com/midudev/better-claude
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderNode, RenderViewport, SessionRateLimit } from 'claude-code'
+import type { EngineInterface, Register, RenderNode, RenderViewport, SessionContextUsage, SessionRateLimit } from 'claude-code'
 
-import type { Limit } from '../types'
+import type { Fill, Limit } from '../types'
 
 const limits = atom({ plugin: 'mini-hud', key: 'limits' } as const, [] as Limit[])
 const view = atom({ plugin: 'mini-hud', key: 'view' } as const, 0) // which window the rotating meter shows
 const tick = atom({ plugin: 'mini-hud', key: 'tick' } as const, 0) // redraws the countdown
 const model = atom({ plugin: 'mini-hud', key: 'model' } as const, '')
 const effort = atom({ plugin: 'mini-hud', key: 'effort' } as const, '')
+const context = atom({ plugin: 'mini-hud', key: 'context' } as const, null as Fill)
+
+const MOONS = ['🌑', '🌒', '🌓', '🌔', '🌕']
+/** The moon fills as the context does: new at 0%, full from 88%. */
+export const moonFor = (percent: number) => MOONS[Math.min(4, Math.max(0, Math.round(percent / 25)))] ?? '🌑'
+const contextColor = (percent: number) => (percent >= 75 ? 'error' : percent >= 50 ? 'warning' : undefined)
+
+// The compaction window (autoCompactWindow, or the model's own) and the model it was read for.
+let compactTokens = 0
+let compactFor = ''
+let lastFill: Fill = null
+let isCounting = false
+
+/**
+ * The fill against the window autocompact measures, as /context does: the engine's own `percent` is
+ * against the model's whole window. The window is read once per model (a local estimate, no request),
+ * and the fill is that estimate until a response reports tokens.
+ */
+async function syncContext ($: EngineInterface, usage: SessionContextUsage) {
+  if (isCounting) return
+  let estimate: number | undefined
+  if (compactFor !== lastSessionModel || usage.tokens === undefined) {
+    isCounting = true
+    try {
+      const { breakdown } = (await $.session.usage({ breakdown: 'summary' })).context
+      if (breakdown) {
+        compactTokens = breakdown.rawMaxTokens
+        compactFor = lastSessionModel
+        estimate = breakdown.percentage
+      }
+    } finally {
+      isCounting = false
+    }
+  }
+  const max = compactTokens || usage.window
+  const value = usage.tokens !== undefined && max > 0 ? (usage.tokens / max) * 100 : estimate
+  const fill: Fill = value === undefined ? null : { value, isEstimate: usage.tokens === undefined }
+  if (lastFill?.value === fill?.value && lastFill?.isEstimate === fill?.isEstimate) return
+  lastFill = fill
+  await update($, context, () => fill)
+}
 
 /** "claude-opus-5-5" → "Opus 5.5", "claude-sonnet-4-5-20250929[1m]" → "Sonnet 4.5 1M", "opus" → "Opus". */
 export function prettyModel (id: string) {
@@ -152,6 +193,10 @@ export const register: Register = (on, options) => {
   const rotateSeconds = Number(options.rotateSeconds)
   const rotateMs = (rotateSeconds > 0 ? rotateSeconds : ROTATE_SECONDS) * 1000
   const display = DISPLAYS.includes(String(options.display)) ? String(options.display) : 'rotate'
+  const showModelName = options.showModel !== false
+  const showEffort = options.showEffort !== false
+  const showContext = options.showContext !== false
+  const showUsage = options.showUsage !== false
   const hidden = [...(hideCycleHint ? [CYCLE_HINT] : []), ...(hideInterruptHint ? [INTERRUPT_HINT] : [])]
 
   /** The hint line without the parts hidden, and without the empty parts they leave. */
@@ -193,6 +238,10 @@ export const register: Register = (on, options) => {
     ])
     const own = (perModel as Record<string, { effortLevel?: unknown }> | undefined)?.[lastSessionModel]?.effortLevel
     await showModel($, lastSessionModel, String(own ?? level ?? ''))
+    compactFor = ''
+    lastFill = null
+    isCounting = false
+    await syncContext($, usage.context)
 
     if (e.isInteractive) {
       // Another session's reading shows up within TICK_MS of being stored.
@@ -204,6 +253,8 @@ export const register: Register = (on, options) => {
           lastSessionModel = id
           return showModel($, id, lastEffort)
         }).catch(() => {})
+        // A resume, a rewind, a compaction or a /model switch moves the fill without a measurement.
+        void $.session.usage().then(usage => syncContext($, usage.context)).catch(() => {})
         if (windowCount > 0) void update($, tick, n => n + 1)
       })
       if (display === 'rotate') {
@@ -231,17 +282,21 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     await remember($, windowsOf(e.rateLimits))
+    if (e.changed.includes('context')) await syncContext($, e.context)
     return next(e)
   })
+
 
   // Bottom right of the prompt footer: the meter, then what is beneath it (the engine's mode labels,
   // another plugin's switch), so a plugin that draws itself last stays last whichever wraps the other.
   // Where the row is short the meter gives up its bar, then the time until the reset, then itself.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const [all, name, level] = await Promise.all([read($, limits), read($, model), read($, effort)])
+    if (!showUsage) return next(e)
+    const all = await read($, limits)
+    if (all.length === 0) return next(e)
     const index = display === 'rotate' && all.length >= 2 ? await read($, view) : 0
     const shown = visible(all, display, index)
-    if (shown.length === 0 && !name) return next(e)
+    if (shown.length === 0) return next(e)
     // Subscribes this drawing to the countdown tick alongside reading the clock and beneath node
     const [, now, beneath] = await Promise.all([read($, tick), $.clock.now(), next(e)])
     const hasBeneath = e.props.modes.length > 0 || !isBlank(beneath)
@@ -260,35 +315,23 @@ export const register: Register = (on, options) => {
     const hasPlugin = holdsPlugin(beneath)
     const room = roomOf(e) - (hasBeneath ? below + SEPARATOR.length : 0) - (hasPlugin ? 0 : AROUND)
     const given = hasPlugin ? Math.max(0, BENEATH_FLOOR - below) : 0
-    // The model and its effort lead, and stay longest: the windows go before they do.
-    const head = name + (name && level ? SEPARATOR + level : '')
-    const headWidth = widthOf(head)
-    const lead = headWidth > 0 && windows.length > 0 ? headWidth + BETWEEN.length : headWidth
-    const short = windows.length === 0 ? 0 : windows.reduce((sum, w) => sum + w.short, (windows.length - 1) * BETWEEN.length)
+    const short = windows.reduce((sum, w) => sum + w.short, (windows.length - 1) * BETWEEN.length)
     const bars = windows.length * (1 + CELLS)
     const resets = windows.reduce((sum, w) => sum + widthOf(w.reset), 0)
     const fit = [
-      ...(windows.length > 0
-        ? [
-            { hasWindows: true, hasBar: true, hasReset: true, width: lead + short + bars + resets },
-            { hasWindows: true, hasBar: false, hasReset: true, width: lead + short + resets },
-            { hasWindows: true, hasBar: false, hasReset: false, width: lead + short }
-          ]
-        : []),
-      ...(headWidth > 0 ? [{ hasWindows: false, hasBar: false, hasReset: false, width: headWidth }] : [])
+      { hasBar: true, hasReset: true, width: short + bars + resets },
+      { hasBar: false, hasReset: true, width: short + resets },
+      { hasBar: false, hasReset: false, width: short }
     ].find(({ hasReset, width }) => width <= (hasReset ? room - given : room))
     if (!fit) return beneath
-    const drawn = fit.hasWindows ? windows : []
 
     const { Box, Text } = $.ui.resolve(e)
 
     return (
       <Box flexDirection="row">
-        {name ? <Text color="claude">{name}</Text> : null}
-        {name && level ? <Text dimColor>{SEPARATOR + level}</Text> : null}
-        {drawn.map((w, i) => (
+        {windows.map((w, i) => (
           <Box flexDirection="row" key={w.kind}>
-            {i > 0 || name ? <Text dimColor>{BETWEEN}</Text> : null}
+            {i > 0 ? <Text dimColor>{BETWEEN}</Text> : null}
             <Text dimColor>{w.label}</Text>
             {fit.hasBar ? <Text color={colorFor(w.percent)}>{' ' + '━'.repeat(w.filled)}</Text> : null}
             {fit.hasBar ? <Text dimColor>{'─'.repeat(CELLS - w.filled)}</Text> : null}
@@ -302,21 +345,45 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // The engine draws the mode label itself; the hint line after it starts with "(shift+tab to cycle)",
-  // and while Claude works holds "esc to interrupt". Its width tells the meter how much room is left.
-  on('ui.render', { component: 'PromptHint' }, ($, e, next) => {
+  // Left of the footer, right after the mode label the engine draws: the model, its effort and the
+  // context fill, then the hint line ("(shift+tab to cycle)", "esc to interrupt" while Claude works).
+  // Its width tells the meter at the right how much room is left.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     if (e.props.hint !== lastHint) {
       lastHint = e.props.hint
       lastTidied = tidy(e.props.hint)
     }
     const hint = lastTidied
+    const [shownName, shownLevel, shownFill] = await Promise.all([read($, model), read($, effort), read($, context)])
+    const name = showModelName ? shownName : ''
+    const level = showEffort ? shownLevel : ''
+    const fill = showContext ? shownFill : null
+    const percent = fill === null ? '' : `${fill.isEstimate ? '~' : ''}${Math.round(fill.value)}%`
+    const parts = [name, level, fill === null ? '' : `${moonFor(fill.value)} ${percent}`].filter(Boolean)
+    const hasHint = hint.trim() !== ''
     if (e.surface === 'terminal') {
-      const width = widthOf(hint)
+      // The moon takes two columns.
+      const ours = parts.length === 0 ? 0 : widthOf(parts.join(SEPARATOR)) + (fill === null ? 0 : 1)
+      const width = widthOf(hint) + ours + (ours > 0 && hasHint ? SEPARATOR.length : 0)
       if (width !== hintWidth) {
         hintWidth = width
         $.ui.invalidate('ui.render')
       }
     }
-    return hint === e.props.hint ? next(e) : next({ ...e, props: { ...e.props, hint } })
+    const beneath = await (hint === e.props.hint ? next(e) : next({ ...e, props: { ...e.props, hint } }))
+    if (parts.length === 0) return beneath
+
+    const { Box, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="row">
+        {name ? <Text color="claude">{name}</Text> : null}
+        {level ? <Text dimColor>{(name ? SEPARATOR : '') + level}</Text> : null}
+        {fill !== null && (name || level) ? <Text dimColor>{SEPARATOR}</Text> : null}
+        {fill !== null ? <Text color={contextColor(fill.value)} dimColor={contextColor(fill.value) === undefined}>{`${moonFor(fill.value)} ${percent}`}</Text> : null}
+        {hasHint ? <Text dimColor>{SEPARATOR}</Text> : null}
+        {hasHint ? beneath : null}
+      </Box>
+    )
   })
 }

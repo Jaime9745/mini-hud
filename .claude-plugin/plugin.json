@@ -1,6 +1,6 @@
 {
   "name": "mini-hud",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model, effort and subscription usage (5-hour and weekly) at the bottom right: rotating, side by side or one alone.",
   "author": {
     "name": "Jaime9745",
@@ -10,6 +10,30 @@
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "showModel": {
+      "type": "boolean",
+      "title": "Show the model",
+      "description": "The model in use, right after the permission mode.",
+      "default": true
+    },
+    "showEffort": {
+      "type": "boolean",
+      "title": "Show the effort",
+      "description": "The reasoning effort level (low, medium, high, xhigh, max).",
+      "default": true
+    },
+    "showContext": {
+      "type": "boolean",
+      "title": "Show the context",
+      "description": "A moon and the % of context used, measured against the autocompact window.",
+      "default": true
+    },
+    "showUsage": {
+      "type": "boolean",
+      "title": "Show subscription usage",
+      "description": "The 5-hour and weekly windows at the bottom right.",
+      "default": true
+    },
     "display": {
       "type": "string",
       "title": "What the usage meter shows",
