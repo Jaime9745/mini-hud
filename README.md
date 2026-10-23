@@ -17,7 +17,7 @@ Run `/mini-hud:configure`: it asks what to show and writes the options for you. 
 
 | Option              | Default  |                                  |
 | ------------------- | -------- | -------------------------------- |
-| `position`          | `footer` | `footer`, `below` or `above`     |
+| `position`          | `footer` | `footer` or `above`              |
 | `showModel`         | `true`   | the model                        |
 | `showEffort`        | `true`   | the effort level                 |
 | `showGit`           | `true`   | folder + git branch              |

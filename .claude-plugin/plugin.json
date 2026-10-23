@@ -1,6 +1,6 @@
 {
   "name": "mini-hud",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A minimal HUD in the prompt footer: model, effort, folder and git branch, context bar, and subscription usage (5-hour and weekly), rotating, side by side or one alone.",
   "author": {
     "name": "Jaime9745",
@@ -13,10 +13,9 @@
     "position": {
       "type": "string",
       "title": "Where the HUD shows",
-      "description": "footer: in the row of the permission mode, the usage meter at its right. below: on a row of its own under that row. above: on a row of its own over the prompt.",
+      "description": "footer: in the row of the permission mode, the usage meter at its right. above: on a row of its own over the prompt.",
       "options": [
         "footer",
-        "below",
         "above"
       ],
       "default": "footer"

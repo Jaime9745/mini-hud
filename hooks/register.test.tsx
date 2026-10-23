@@ -243,7 +243,7 @@ test("an /effort shows at once, before the next request", async ($, on) => {
   await ui.unmount();
 });
 
-for (const position of ["footer", "below", "above"] as const) {
+for (const position of ["footer", "above"] as const) {
   test(`position ${position} draws the row where it says`, { options: { position } }, async ($, on) => {
     mock.clock(on);
     mock.store(on, { limits: [{ kind: "five_hour", percentUsed: 41 }], at: 1 });
@@ -275,7 +275,7 @@ for (const position of ["footer", "below", "above"] as const) {
     const above = await texts("AbovePrompt", {
       hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: {},
     });
-    const drawn = { footer: hint + mode, below: hint, above }[position];
+    const drawn = { footer: hint + mode, above }[position];
     expect(drawn).toContain("Opus 5.5");
     expect(drawn).toContain("5h");
     if (position !== "above") expect(above).toBe("engine");

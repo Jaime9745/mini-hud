@@ -161,9 +161,10 @@ const LABELS: Record<string, string> = { five_hour: "5h", seven_day: "week" };
 const ROTATE_SECONDS = 8;
 const TICK_MS = 8000;
 const DISPLAYS = ["rotate", "both", "session", "week"];
-// Where the HUD draws: in the footer row beside the mode label, on a row of its own under it, or in
-// the band over the prompt.
-const POSITIONS = ["footer", "below", "above"];
+// Where the HUD draws: in the footer row beside the mode label, or in the band over the prompt.
+// A row of its own under the footer row is not offered: it would start after the mode label the
+// engine draws, which no API measures.
+const POSITIONS = ["footer", "above"];
 const WINDOW_OF: Record<string, string> = {
   session: "five_hour",
   week: "seven_day",
@@ -788,8 +789,7 @@ export const register: Register = (on, options) => {
 
   // Left of the footer, right after the mode label the engine draws: the model, its effort, the folder
   // and git branch and the context fill, then the hint line ("(shift+tab to cycle)", "esc to interrupt"
-  // while Claude works). The hint's width tells the meter how much room is left. With `position`
-  // "below" the whole row goes on a row of its own under that line instead.
+  // while Claude works). The hint's width tells the meter how much room is left.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     if (e.props.hint !== lastHint) {
       lastHint = e.props.hint;
@@ -804,20 +804,6 @@ export const register: Register = (on, options) => {
     if (position === "above") return passHint();
     const ui = $.ui.resolve(e);
     const { Box, Text } = ui;
-    if (position === "below") {
-      const [{ left, meter }, beneath] = await Promise.all([
-        rowOf($, show),
-        passHint(),
-      ]);
-      const row = rowTree(ui, left, meter, roomOf(e));
-      if (row === null) return beneath;
-      return (
-        <Box flexDirection="column">
-          {beneath}
-          {row}
-        </Box>
-      );
-    }
     if (e.surface === "terminal") {
       const width = hasHint ? widthOf(hint) : 0;
       if (width !== hintWidth) {
