@@ -242,3 +242,43 @@ test("an /effort shows at once, before the next request", async ($, on) => {
   expect((await ui.find({ type: "Text", text: /^(medium|high)$/ }))?.text).toBe("high");
   await ui.unmount();
 });
+
+for (const position of ["footer", "below", "above"] as const) {
+  test(`position ${position} draws the row where it says`, { options: { position } }, async ($, on) => {
+    mock.clock(on);
+    mock.store(on, { limits: [{ kind: "five_hour", percentUsed: 41 }], at: 1 });
+    on("session.start", (_, e) => ({ cwd: e.cwd }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.cwd", () => ({ value: "/work/app" }));
+    on("session.usage", () => ({
+      value: { startedAt: 0, rateLimits: [], context: { window: 200000 } },
+    }));
+    on("settings.read", () => ({ value: {} }));
+    on("process.run", () => ({
+      value: { exitCode: 128, stdout: "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false },
+    }));
+    on("ui.render", ($, e) => {
+      const { Text } = $.ui.resolve(e);
+      return <Text>engine</Text>;
+    });
+    await $.session.start({ cwd: "/work/app", surface: "terminal", isInteractive: false });
+
+    const viewport = { columns: 160, rows: 40 };
+    const texts = async (component: "PromptHint" | "SessionMode" | "AbovePrompt", props: object) => {
+      const ui = await $.ui.mount({ plugin: "mini-hud", surface: "terminal", component, viewport, props } as never);
+      const all = (await ui.findAll({ type: "Text" })).map((t) => t.text).join("");
+      await ui.unmount();
+      return all;
+    };
+    const hint = await texts("PromptHint", { isDraft: false, isWorking: false, hint: "? for shortcuts" });
+    const mode = await texts("SessionMode", { modes: [] });
+    const above = await texts("AbovePrompt", {
+      hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: {},
+    });
+    const drawn = { footer: hint + mode, below: hint, above }[position];
+    expect(drawn).toContain("Opus 5.5");
+    expect(drawn).toContain("5h");
+    if (position !== "above") expect(above).toBe("engine");
+    if (position === "above") expect(hint + mode).not.toContain("Opus 5.5");
+  });
+}

@@ -14,8 +14,9 @@ If both could apply, write the options under both keys.
 
 ## Steps
 
-1. Read `~/.claude/settings.json` and show the current values (defaults when unset: every `show*` and `hide*` is `true`, `display` is `rotate`, `rotateSeconds` is `8`).
+1. Read `~/.claude/settings.json` and show the current values (defaults when unset: every `show*` and `hide*` is `true`, `position` is `footer`, `display` is `rotate`, `rotateSeconds` is `8`).
 2. Ask with AskUserQuestion, in the user's language, in one call:
+   - **Where it shows** (`position`): `footer` (in the permission mode's row, usage at its right), `below` (a row of its own under that row), `above` (a row of its own over the prompt).
    - **What to show** (multiSelect): Model (`showModel`), Effort (`showEffort`), Folder and git branch (`showGit`), Context bar and % (`showContext`), Subscription usage 5h / week (`showUsage`). Pre-describe the current state in each option's description.
    - **Usage display** (only matters if usage is shown): `rotate` (alternate 5h and week), `both`, `session` (5h only), `week` (week only).
    - **Hints to hide** (multiSelect): "(shift+tab to cycle)" (`hideCycleHint`), "esc to interrupt" (`hideInterruptHint`).

@@ -1,6 +1,7 @@
 // Based on sub-meter by midudev (MIT): https://github.com/midudev/better-claude
 import { atom, read, update } from "claude-code";
 import type {
+  Elements,
   EngineInterface,
   Register,
   RenderNode,
@@ -160,6 +161,9 @@ const LABELS: Record<string, string> = { five_hour: "5h", seven_day: "week" };
 const ROTATE_SECONDS = 8;
 const TICK_MS = 8000;
 const DISPLAYS = ["rotate", "both", "session", "week"];
+// Where the HUD draws: in the footer row beside the mode label, on a row of its own under it, or in
+// the band over the prompt.
+const POSITIONS = ["footer", "below", "above"];
 const WINDOW_OF: Record<string, string> = {
   session: "five_hour",
   week: "seven_day",
@@ -568,6 +572,89 @@ async function refill($: EngineInterface, show: Show, rotateMs: number) {
   await start($, show, rotateMs);
 }
 
+/** The element constructors the trees below are built from, as `$.ui.resolve(e)` hands them. */
+type Ui = Pick<Elements["terminal"], "Box" | "Text">;
+
+/** The left part's pieces for a step, each after a SEPARATOR but the first; empty when none shows. */
+function leftTree({ Box, Text }: Ui, left: Left, step: Step) {
+  const { name, level, folder, branch, percent, filled, value } = left;
+  const hasBranch = step.hasBranch && branch !== "";
+  const hasFolder =
+    folder !== "" && (step.hasFolder || (step.hasBranch && branch === ""));
+  const hasContext = step.hasContext && percent !== "";
+  const segments = [
+    step.hasModel && name ? <Text color="claude">{name}</Text> : null,
+    step.hasEffort && level ? <Text dimColor>{level}</Text> : null,
+    hasFolder || hasBranch ? (
+      <Box flexDirection="row">
+        {hasFolder ? <Text>{folder}</Text> : null}
+        {hasBranch ? (
+          <Text color="merged">{(hasFolder ? " " : "") + "git:("}</Text>
+        ) : null}
+        {hasBranch ? <Text color="suggestion">{branch}</Text> : null}
+        {hasBranch ? <Text color="merged">)</Text> : null}
+      </Box>
+    ) : null,
+    hasContext ? (
+      <Box flexDirection="row">
+        <Text dimColor>ctx </Text>
+        {step.hasContextBar ? (
+          <Text color={contextColor(value)}>{"━".repeat(filled)}</Text>
+        ) : null}
+        {step.hasContextBar ? (
+          <Text dimColor>{"─".repeat(CELLS - filled) + " "}</Text>
+        ) : null}
+        <Text color={step.hasContextBar ? undefined : contextColor(value)}>
+          {percent}
+        </Text>
+      </Box>
+    ) : null,
+  ].filter(Boolean);
+  return segments.map((segment, i) => (
+    <Box flexDirection="row" key={String(i)}>
+      {i > 0 ? <Text dimColor>{SEPARATOR}</Text> : null}
+      {segment}
+    </Box>
+  ));
+}
+
+/** The meter's windows for a step, BETWEEN apart; empty when none shows. */
+function meterTree({ Box, Text }: Ui, meter: Meter[], step: Step) {
+  return windowsFor(meter, step).map((w, i) => (
+    <Box flexDirection="row" key={w.kind}>
+      {i > 0 ? <Text dimColor>{BETWEEN}</Text> : null}
+      <Text dimColor>{w.label}</Text>
+      {step.hasMeterBar ? (
+        <Text color={colorFor(w.percent)}>{" " + "━".repeat(w.filled)}</Text>
+      ) : null}
+      {step.hasMeterBar ? (
+        <Text dimColor>{"─".repeat(CELLS - w.filled)}</Text>
+      ) : null}
+      <Text>{w.used}</Text>
+      {step.hasReset && w.reset ? <Text dimColor>{w.reset}</Text> : null}
+    </Box>
+  ));
+}
+
+/** The whole row on a row of its own, `room` columns wide: the left part, the meter at the right end. */
+function rowTree(ui: Ui, left: Left, meter: Meter[], room: number) {
+  const step = fitRow(left, meter, room);
+  const segments = leftTree(ui, left, step);
+  const windows = meterTree(ui, meter, step);
+  if (segments.length === 0 && windows.length === 0) return null;
+  const { Box } = ui;
+  return (
+    <Box
+      flexDirection="row"
+      justifyContent="space-between"
+      width={Number.isFinite(room) ? room : undefined}
+    >
+      <Box flexDirection="row">{segments}</Box>
+      <Box flexDirection="row">{windows}</Box>
+    </Box>
+  );
+}
+
 export const register: Register = (on, options) => {
   seenAt = 0;
   windowCount = 0;
@@ -580,6 +667,9 @@ export const register: Register = (on, options) => {
   const display = DISPLAYS.includes(String(options.display))
     ? String(options.display)
     : "rotate";
+  const position = POSITIONS.includes(String(options.position))
+    ? String(options.position)
+    : "footer";
   const showModelName = options.showModel !== false;
   const showEffort = options.showEffort !== false;
   const showContext = options.showContext !== false;
@@ -666,7 +756,7 @@ export const register: Register = (on, options) => {
   // another plugin's switch), so a plugin that draws itself last stays last whichever wraps the other.
   // Where the row is short the meter is the last thing it gives up (fitRow).
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
-    if (!showUsage) return next(e);
+    if (!showUsage || position !== "footer") return next(e);
     const [{ left, meter }, beneath] = await Promise.all([
       rowOf($, show),
       next(e),
@@ -681,29 +771,15 @@ export const register: Register = (on, options) => {
       }
     }
     const step = fitRow(left, meter, roomOf(e), hintWidth, beneathWidth);
-    const windows = windowsFor(meter, step);
+    const ui = $.ui.resolve(e);
+    const windows = meterTree(ui, meter, step);
     if (windows.length === 0) return beneath;
 
-    const { Box, Text } = $.ui.resolve(e);
+    const { Box, Text } = ui;
 
     return (
       <Box flexDirection="row">
-        {windows.map((w, i) => (
-          <Box flexDirection="row" key={w.kind}>
-            {i > 0 ? <Text dimColor>{BETWEEN}</Text> : null}
-            <Text dimColor>{w.label}</Text>
-            {step.hasMeterBar ? (
-              <Text color={colorFor(w.percent)}>
-                {" " + "━".repeat(w.filled)}
-              </Text>
-            ) : null}
-            {step.hasMeterBar ? (
-              <Text dimColor>{"─".repeat(CELLS - w.filled)}</Text>
-            ) : null}
-            <Text>{w.used}</Text>
-            {step.hasReset && w.reset ? <Text dimColor>{w.reset}</Text> : null}
-          </Box>
-        ))}
+        {windows}
         {hasBeneath ? <Text dimColor>{SEPARATOR}</Text> : null}
         {beneath}
       </Box>
@@ -712,7 +788,8 @@ export const register: Register = (on, options) => {
 
   // Left of the footer, right after the mode label the engine draws: the model, its effort, the folder
   // and git branch and the context fill, then the hint line ("(shift+tab to cycle)", "esc to interrupt"
-  // while Claude works). The hint's width tells the meter how much room is left.
+  // while Claude works). The hint's width tells the meter how much room is left. With `position`
+  // "below" the whole row goes on a row of its own under that line instead.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     if (e.props.hint !== lastHint) {
       lastHint = e.props.hint;
@@ -720,6 +797,27 @@ export const register: Register = (on, options) => {
     }
     const hint = lastTidied;
     const hasHint = hint.trim() !== "";
+    const passHint = () =>
+      hint === e.props.hint
+        ? next(e)
+        : next({ ...e, props: { ...e.props, hint } });
+    if (position === "above") return passHint();
+    const ui = $.ui.resolve(e);
+    const { Box, Text } = ui;
+    if (position === "below") {
+      const [{ left, meter }, beneath] = await Promise.all([
+        rowOf($, show),
+        passHint(),
+      ]);
+      const row = rowTree(ui, left, meter, roomOf(e));
+      if (row === null) return beneath;
+      return (
+        <Box flexDirection="column">
+          {beneath}
+          {row}
+        </Box>
+      );
+    }
     if (e.surface === "terminal") {
       const width = hasHint ? widthOf(hint) : 0;
       if (width !== hintWidth) {
@@ -729,60 +827,25 @@ export const register: Register = (on, options) => {
     }
     const [{ left, meter }, beneath] = await Promise.all([
       rowOf($, show),
-      hint === e.props.hint
-        ? next(e)
-        : next({ ...e, props: { ...e.props, hint } }),
+      passHint(),
     ]);
     const step = fitRow(left, meter, roomOf(e), hintWidth, beneathWidth);
-    const { name, level, folder, branch, percent, filled, value } = left;
-    const hasBranch = step.hasBranch && branch !== "";
-    const hasFolder =
-      folder !== "" && (step.hasFolder || (step.hasBranch && branch === ""));
-    const hasContext = step.hasContext && percent !== "";
-
-    const { Box, Text } = $.ui.resolve(e);
-
-    const segments = [
-      step.hasModel && name ? <Text color="claude">{name}</Text> : null,
-      step.hasEffort && level ? <Text dimColor>{level}</Text> : null,
-      hasFolder || hasBranch ? (
-        <Box flexDirection="row">
-          {hasFolder ? <Text>{folder}</Text> : null}
-          {hasBranch ? (
-            <Text color="merged">{(hasFolder ? " " : "") + "git:("}</Text>
-          ) : null}
-          {hasBranch ? <Text color="suggestion">{branch}</Text> : null}
-          {hasBranch ? <Text color="merged">)</Text> : null}
-        </Box>
-      ) : null,
-      hasContext ? (
-        <Box flexDirection="row">
-          <Text dimColor>ctx </Text>
-          {step.hasContextBar ? (
-            <Text color={contextColor(value)}>{"━".repeat(filled)}</Text>
-          ) : null}
-          {step.hasContextBar ? (
-            <Text dimColor>{"─".repeat(CELLS - filled) + " "}</Text>
-          ) : null}
-          <Text color={step.hasContextBar ? undefined : contextColor(value)}>
-            {percent}
-          </Text>
-        </Box>
-      ) : null,
-    ].filter(Boolean);
+    const segments = leftTree(ui, left, step);
     if (segments.length === 0) return beneath;
 
     return (
       <Box flexDirection="row">
-        {segments.map((segment, i) => (
-          <Box flexDirection="row" key={String(i)}>
-            {i > 0 ? <Text dimColor>{SEPARATOR}</Text> : null}
-            {segment}
-          </Box>
-        ))}
+        {segments}
         {hasHint ? <Text dimColor>{SEPARATOR}</Text> : null}
         {hasHint ? beneath : null}
       </Box>
     );
+  });
+
+  // With `position` "above": the whole row in the band over the prompt, the meter at its right end.
+  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+    if (position !== "above" || e.props.hasSurvey) return next(e);
+    const { left, meter } = await rowOf($, show);
+    return rowTree($.ui.resolve(e), left, meter, e.props.bodyColumns) ?? next(e);
   });
 };
