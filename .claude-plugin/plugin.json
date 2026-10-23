@@ -25,7 +25,7 @@
     "showContext": {
       "type": "boolean",
       "title": "Show the context",
-      "description": "A moon and the % of context used, measured against the autocompact window.",
+      "description": "A bar and the % of context used, measured against the autocompact window.",
       "default": true
     },
     "showUsage": {

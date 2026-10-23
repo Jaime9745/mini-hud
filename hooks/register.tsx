@@ -11,10 +11,9 @@ const model = atom({ plugin: 'mini-hud', key: 'model' } as const, '')
 const effort = atom({ plugin: 'mini-hud', key: 'effort' } as const, '')
 const context = atom({ plugin: 'mini-hud', key: 'context' } as const, null as Fill)
 
-const MOONS = ['🌑', '🌒', '🌓', '🌔', '🌕']
-/** The moon fills as the context does: new at 0%, full from 88%. */
-export const moonFor = (percent: number) => MOONS[Math.min(4, Math.max(0, Math.round(percent / 25)))] ?? '🌑'
-const contextColor = (percent: number) => (percent >= 75 ? 'error' : percent >= 50 ? 'warning' : undefined)
+const contextColor = (percent: number) => (percent >= 75 ? 'error' : percent >= 50 ? 'warning' : 'claude')
+/** Cells of a 10-cell bar a fill takes, 0 to 10. */
+export const cellsFor = (percent: number) => Math.round((Math.min(Math.max(percent, 0), 100) / 100) * 10)
 
 // The compaction window (autoCompactWindow, or the model's own) and the model it was read for.
 let compactTokens = 0
@@ -359,11 +358,12 @@ export const register: Register = (on, options) => {
     const level = showEffort ? shownLevel : ''
     const fill = showContext ? shownFill : null
     const percent = fill === null ? '' : `${fill.isEstimate ? '~' : ''}${Math.round(fill.value)}%`
-    const parts = [name, level, fill === null ? '' : `${moonFor(fill.value)} ${percent}`].filter(Boolean)
+    const filled = fill === null ? 0 : cellsFor(fill.value)
+    const bar = fill === null ? '' : `ctx ${'━'.repeat(filled)}${'─'.repeat(CELLS - filled)} ${percent}`
+    const parts = [name, level, bar].filter(Boolean)
     const hasHint = hint.trim() !== ''
     if (e.surface === 'terminal') {
-      // The moon takes two columns.
-      const ours = parts.length === 0 ? 0 : widthOf(parts.join(SEPARATOR)) + (fill === null ? 0 : 1)
+      const ours = parts.length === 0 ? 0 : widthOf(parts.join(SEPARATOR))
       const width = widthOf(hint) + ours + (ours > 0 && hasHint ? SEPARATOR.length : 0)
       if (width !== hintWidth) {
         hintWidth = width
@@ -380,7 +380,10 @@ export const register: Register = (on, options) => {
         {name ? <Text color="claude">{name}</Text> : null}
         {level ? <Text dimColor>{(name ? SEPARATOR : '') + level}</Text> : null}
         {fill !== null && (name || level) ? <Text dimColor>{SEPARATOR}</Text> : null}
-        {fill !== null ? <Text color={contextColor(fill.value)} dimColor={contextColor(fill.value) === undefined}>{`${moonFor(fill.value)} ${percent}`}</Text> : null}
+        {fill !== null ? <Text dimColor>ctx </Text> : null}
+        {fill !== null ? <Text color={contextColor(fill.value)}>{'━'.repeat(filled)}</Text> : null}
+        {fill !== null ? <Text dimColor>{'─'.repeat(CELLS - filled)}</Text> : null}
+        {fill !== null ? <Text>{' ' + percent}</Text> : null}
         {hasHint ? <Text dimColor>{SEPARATOR}</Text> : null}
         {hasHint ? beneath : null}
       </Box>

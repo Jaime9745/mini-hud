@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { moonFor, prettyModel } from './register'
+import { cellsFor, prettyModel } from './register'
 
 test('model ids read as names', () => {
   expect(prettyModel('claude-opus-5-5')).toBe('Opus 5.5')
@@ -10,11 +10,10 @@ test('model ids read as names', () => {
   expect(prettyModel('gpt-x.y')).toBe('gpt-x.y')
 })
 
-test('the moon fills with the context', () => {
-  expect(moonFor(0)).toBe('🌑')
-  expect(moonFor(30)).toBe('🌒')
-  expect(moonFor(50)).toBe('🌓')
-  expect(moonFor(70)).toBe('🌔')
-  expect(moonFor(95)).toBe('🌕')
-  expect(moonFor(140)).toBe('🌕')
+test('the context bar fills ten cells', () => {
+  expect(cellsFor(0)).toBe(0)
+  expect(cellsFor(48)).toBe(5)
+  expect(cellsFor(100)).toBe(10)
+  expect(cellsFor(140)).toBe(10)
+  expect(cellsFor(-3)).toBe(0)
 })
