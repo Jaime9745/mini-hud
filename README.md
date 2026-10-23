@@ -2,11 +2,11 @@
 
 A minimal HUD for Claude Code, drawn in the prompt footer.
 
-- **Left, right after the mode** (auto, plan, bypass…): the model, its reasoning effort, and the context fill as a bar and a percentage, like the usage meter, measured against the autocompact window (`autoCompactWindow`, or the model's own window), the way `/context` measures it.
+- **Left, right after the mode** (auto, plan, bypass…): the model, its reasoning effort, the folder you work in with its git branch (`*` when there are uncommitted changes; a worktree shows its own branch), and the context fill as a bar and a percentage, like the usage meter, measured against the autocompact window (`autoCompactWindow`, or the model's own window), the way `/context` measures it.
 - **Bottom right**: your subscription usage (5-hour and weekly windows) with a bar, a percentage and the time until it resets.
 
 ```
-⏵⏵ bypass permissions on · Opus 5.5 · high · ctx ━━━━━───── 48%            5h ━━━━────── 42% ↻ 2h 3m
+⏵⏵ bypass permissions on · Opus 5.5 · high · mini-hud git:(main*) · ctx ━━━━━───── 48%            5h ━━━━────── 42% ↻ 2h 3m
 ```
 
 The context bar turns yellow from 50% and red from 75%. A `~` before the percentage means an estimate, before the first response reports tokens.
@@ -19,6 +19,7 @@ Run `/mini-hud:configure`: it asks what to show and writes the options for you. 
 | --- | --- | --- |
 | `showModel` | `true` | the model |
 | `showEffort` | `true` | the effort level |
+| `showGit` | `true` | folder + git branch |
 | `showContext` | `true` | context bar + % |
 | `showUsage` | `true` | subscription usage at the right |
 | `display` | `rotate` | see below |

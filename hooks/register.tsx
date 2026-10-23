@@ -2,16 +2,45 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode, RenderViewport, SessionContextUsage, SessionRateLimit } from 'claude-code'
 
-import type { Fill, Limit } from '../types'
+import type { Fill, Git, Limit } from '../types'
 
 const limits = atom({ plugin: 'mini-hud', key: 'limits' } as const, [] as Limit[])
 const view = atom({ plugin: 'mini-hud', key: 'view' } as const, 0) // which window the rotating meter shows
 const tick = atom({ plugin: 'mini-hud', key: 'tick' } as const, 0) // redraws the countdown
 const model = atom({ plugin: 'mini-hud', key: 'model' } as const, '')
 const effort = atom({ plugin: 'mini-hud', key: 'effort' } as const, '')
+const git = atom({ plugin: 'mini-hud', key: 'git' } as const, null as Git)
 const context = atom({ plugin: 'mini-hud', key: 'context' } as const, null as Fill)
 
 const contextColor = (percent: number) => (percent >= 75 ? 'error' : percent >= 50 ? 'warning' : 'claude')
+/** The last segment of a path, either separator. */
+export const folderOf = (path: string) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
+
+let lastGit = ''
+let isReadingGit = false
+
+/**
+ * The session's folder and, in a git repository, its branch (a worktree's own) and whether it has
+ * uncommitted changes, as claude-hud shows them by default. Read on a timer, not per drawing.
+ */
+async function syncGit ($: EngineInterface) {
+  if (isReadingGit) return
+  isReadingGit = true
+  try {
+    const cwd = await $.session.cwd()
+    const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 1000 })
+    const branch = head.exitCode === 0 ? head.stdout.trim() : ''
+    const status = branch ? await $.process.run(['git', '--no-optional-locks', 'status', '--porcelain'], { cwd, timeoutMs: 1000 }) : undefined
+    const next: Git = { folder: folderOf(cwd), branch, isDirty: status !== undefined && status.exitCode === 0 && status.stdout.trim() !== '' }
+    const key = JSON.stringify(next)
+    if (key === lastGit) return
+    lastGit = key
+    await update($, git, () => next)
+  } finally {
+    isReadingGit = false
+  }
+}
+
 /** Cells of a 10-cell bar a fill takes, 0 to 10. */
 export const cellsFor = (percent: number) => Math.round((Math.min(Math.max(percent, 0), 100) / 100) * 10)
 
@@ -196,6 +225,7 @@ export const register: Register = (on, options) => {
   const showEffort = options.showEffort !== false
   const showContext = options.showContext !== false
   const showUsage = options.showUsage !== false
+  const showGit = options.showGit !== false
   const hidden = [...(hideCycleHint ? [CYCLE_HINT] : []), ...(hideInterruptHint ? [INTERRUPT_HINT] : [])]
 
   /** The hint line without the parts hidden, and without the empty parts they leave. */
@@ -241,6 +271,9 @@ export const register: Register = (on, options) => {
     lastFill = null
     isCounting = false
     await syncContext($, usage.context)
+    lastGit = ''
+    isReadingGit = false
+    if (showGit) void syncGit($).catch(() => {}) // git is not waited on: the session starts at once
 
     if (e.isInteractive) {
       // Another session's reading shows up within TICK_MS of being stored.
@@ -254,6 +287,7 @@ export const register: Register = (on, options) => {
         }).catch(() => {})
         // A resume, a rewind, a compaction or a /model switch moves the fill without a measurement.
         void $.session.usage().then(usage => syncContext($, usage.context)).catch(() => {})
+        if (showGit) void syncGit($).catch(() => {})
         if (windowCount > 0) void update($, tick, n => n + 1)
       })
       if (display === 'rotate') {
@@ -277,6 +311,12 @@ export const register: Register = (on, options) => {
   on('turn.step', async function * ($, e, next) {
     if (e.agentId === undefined) await showModel($, e.model, e.effort === undefined ? '' : String(e.effort))
     return yield * next(e)
+  })
+
+  // A turn that committed, switched branch or moved the session shows at once.
+  on('turn.complete', async ($, e, next) => {
+    if (showGit && e.agentId === undefined) void syncGit($).catch(() => {})
+    return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -353,14 +393,17 @@ export const register: Register = (on, options) => {
       lastTidied = tidy(e.props.hint)
     }
     const hint = lastTidied
-    const [shownName, shownLevel, shownFill] = await Promise.all([read($, model), read($, effort), read($, context)])
+    const [shownName, shownLevel, shownFill, shownGit] = await Promise.all([read($, model), read($, effort), read($, context), read($, git)])
+    const repo = showGit ? shownGit : null
+    const branch = repo?.branch ? repo.branch + (repo.isDirty ? '*' : '') : ''
+    const where = repo === null ? '' : repo.folder + (branch ? ` git:(${branch})` : '')
     const name = showModelName ? shownName : ''
     const level = showEffort ? shownLevel : ''
     const fill = showContext ? shownFill : null
     const percent = fill === null ? '' : `${fill.isEstimate ? '~' : ''}${Math.round(fill.value)}%`
     const filled = fill === null ? 0 : cellsFor(fill.value)
     const bar = fill === null ? '' : `ctx ${'━'.repeat(filled)}${'─'.repeat(CELLS - filled)} ${percent}`
-    const parts = [name, level, bar].filter(Boolean)
+    const parts = [name, level, where, bar].filter(Boolean)
     const hasHint = hint.trim() !== ''
     if (e.surface === 'terminal') {
       const ours = parts.length === 0 ? 0 : widthOf(parts.join(SEPARATOR))
@@ -379,7 +422,12 @@ export const register: Register = (on, options) => {
       <Box flexDirection="row">
         {name ? <Text color="claude">{name}</Text> : null}
         {level ? <Text dimColor>{(name ? SEPARATOR : '') + level}</Text> : null}
-        {fill !== null && (name || level) ? <Text dimColor>{SEPARATOR}</Text> : null}
+        {where && (name || level) ? <Text dimColor>{SEPARATOR}</Text> : null}
+        {where && repo ? <Text>{repo.folder}</Text> : null}
+        {branch ? <Text color="merged">{' git:('}</Text> : null}
+        {branch ? <Text color="suggestion">{branch}</Text> : null}
+        {branch ? <Text color="merged">)</Text> : null}
+        {fill !== null && (name || level || where) ? <Text dimColor>{SEPARATOR}</Text> : null}
         {fill !== null ? <Text dimColor>ctx </Text> : null}
         {fill !== null ? <Text color={contextColor(fill.value)}>{'━'.repeat(filled)}</Text> : null}
         {fill !== null ? <Text dimColor>{'─'.repeat(CELLS - filled)}</Text> : null}
