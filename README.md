@@ -1,10 +1,30 @@
 # mini-hud
 
-A minimal HUD for Claude Code, drawn at the bottom right of the prompt footer: the model you are using, its reasoning effort, and your subscription usage (5-hour and weekly windows) with a bar, a percentage and the time until it resets.
+A minimal HUD for Claude Code, drawn in the prompt footer.
+
+- **Left, right after the mode** (auto, plan, bypass…): the model, its reasoning effort, and the context fill as a moon and a percentage, measured against the autocompact window (`autoCompactWindow`, or the model's own window), the way `/context` measures it.
+- **Bottom right**: your subscription usage (5-hour and weekly windows) with a bar, a percentage and the time until it resets.
 
 ```
-Opus 5.5 · high  |  5h ━━━━────── 42% ↻ 2h 3m
+⏵⏵ bypass permissions on · Opus 5.5 · high · 🌓 48%            5h ━━━━────── 42% ↻ 2h 3m
 ```
+
+The moon goes 🌑 🌒 🌓 🌔 🌕 as the context fills; it turns yellow from 50% and red from 75%. A `~` before the percentage means an estimate, before the first response reports tokens.
+
+## Configure
+
+Run `/mini-hud:configure`: it asks what to show and writes the options for you. The options:
+
+| Option | Default | |
+| --- | --- | --- |
+| `showModel` | `true` | the model |
+| `showEffort` | `true` | the effort level |
+| `showContext` | `true` | moon + context % |
+| `showUsage` | `true` | subscription usage at the right |
+| `display` | `rotate` | see below |
+| `rotateSeconds` | `8` | seconds per window when rotating |
+| `hideCycleHint` | `true` | hide "(shift+tab to cycle)" |
+| `hideInterruptHint` | `true` | hide "esc to interrupt" |
 
 ## Display modes
 
@@ -15,9 +35,7 @@ Set with the `display` option:
 - `session`: only the 5-hour window
 - `week`: only the weekly window
 
-When the row is narrow it drops the bar first, then the reset time, then the usage; the model and effort stay longest.
-
-It also hides "(shift+tab to cycle)" and "esc to interrupt" to make room (`hideCycleHint`, `hideInterruptHint`).
+When the row is narrow it drops the bar first, then the reset time, then the meter itself.
 
 ## Install
 
