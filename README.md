@@ -36,7 +36,7 @@ Set with the `display` option:
 - `session`: only the 5-hour window
 - `week`: only the weekly window
 
-When the row is narrow it drops the bar first, then the reset time, then the meter itself.
+When the row is narrow it gives up, in order: the context bar (the % stays), the usage bar, the second usage window (with `both`, the one nearest its limit stays), the folder (the branch stays), the reset time, the branch, the effort, the context %, the model. The usage meter goes last.
 
 ## Install
 

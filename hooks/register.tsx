@@ -108,23 +108,16 @@ const CELLS = 10
 const CYCLE_HINT = /\s*\([^()]+ to cycle\)/
 const INTERRUPT_HINT = /\s*esc to interrupt/
 // The terminal footer's row: two columns of padding at each end, the mode label at the left
-// (`⏵⏵ accept edits on ·`, the longest but bypass's) and the hint after it, two columns at least
-// between that and what is drawn here.
+// (MODE_ROW) and the hint after it, two columns at least between that and what is drawn here.
 const FOOTER_PADDING = 4
 const FOOTER_GAP = 2
-const MODE_LABEL = 20
 const SEPARATOR = ' · '
 const BETWEEN = '  |  '
-// Room left, when nothing of another plugin is beneath, for one that may wrap the meter and draw
-// after it: Narrator's narrowest switch (`⏵`) and its separator.
-const AROUND = 1 + SEPARATOR.length
-// The least another plugin's drawing beneath counts for when the meter weighs its bar and reset time
-// (Narrator's `⏵ narrator`): what that plugin gives up where the row is short is not taken back for
-// them, so the meter only shrinks as the row does.
-const BENEATH_FLOOR = 10
 
-// The hint as last drawn on the terminal, in columns.
+// Columns, as last drawn on the terminal, of the engine's hint after the left part and of what is
+// beneath the meter (mode labels, another plugin's drawing): each hook tells the other.
 let hintWidth = 0
+let beneathWidth = 0
 let lastHint = ''
 let lastTidied = ''
 let windowCount = 0
@@ -157,16 +150,68 @@ function widthOfNode (node: RenderNode | undefined, modes: readonly string[]): n
   return (node.children ?? []).reduce((sum, child) => sum + widthOfNode(child, modes), 0)
 }
 
-/** Whether a drawing beneath holds another plugin's: the engine stamps each hook's root with its plugin. */
-function holdsPlugin (node: RenderNode | undefined): boolean {
-  if (node === undefined || node === null || typeof node === 'string' || node.type === 'engine') return false
-  return 'part' in node || (node.children ?? []).some(holdsPlugin)
+// What the engine draws before the left part, measured on the terminal: `⏵⏵ bypass permissions on · `.
+// shortcut: no API names the permission mode, so the longest label is reserved; other modes get spare room.
+const MODE_ROW = 27
+// Longest folder or branch name drawn whole.
+const NAME_MAX = 20
+
+/** A text cut to `max` columns, ending in `…` when cut. */
+export const cut = (text: string, max: number) => widthOf(text) <= max ? text : [...text].slice(0, max - 1).join('') + '…'
+
+/** What the left part can show, already formatted; `value` is the context fill, for its color. */
+export type Left = { name: string; level: string; folder: string; branch: string; percent: string; filled: number; value: number }
+/** One window of the usage meter, formatted. */
+export type Meter = { kind: string; label: string; percent: number; filled: number; used: string; reset: string }
+
+// Where the row is short it gives up, in this order, one more piece per step: the usage meter goes
+// last of all, git before it. With both windows shown, the one nearest its limit stays.
+const GIVE_UP = ['hasContextBar', 'hasMeterBar', 'hasBothWindows', 'hasFolder', 'hasReset', 'hasBranch', 'hasEffort', 'hasContext', 'hasModel', 'hasMeter'] as const
+export type Step = Record<typeof GIVE_UP[number], boolean>
+const STEPS: Step[] = Array.from({ length: GIVE_UP.length + 1 }, (_, i) =>
+  Object.fromEntries(GIVE_UP.map((key, j) => [key, j >= i])) as Step)
+
+const barOf = (filled: number) => '━'.repeat(filled) + '─'.repeat(CELLS - filled)
+
+/** The left part's pieces as text for a step, joined by SEPARATOR when drawn. */
+function partsOf (left: Left, step: Step) {
+  const { name, level, folder, branch, percent, filled } = left
+  const git = step.hasBranch && branch ? `git:(${branch})` : ''
+  const where = [step.hasFolder || (step.hasBranch && !branch) ? folder : '', git].filter(Boolean).join(' ')
+  const fill = step.hasContext && percent ? `ctx ${step.hasContextBar ? barOf(filled) + ' ' : ''}${percent}` : ''
+  return [step.hasModel ? name : '', step.hasEffort ? level : '', where, fill].filter(Boolean)
 }
 
-/** Columns the footer leaves at its right end on the terminal, beside the mode label and the hint; elsewhere, no limit. */
+/** The meter's windows for a step: none, all, or the one nearest its limit. */
+export function windowsFor (meter: Meter[], step: Step) {
+  if (!step.hasMeter) return []
+  if (step.hasBothWindows || meter.length < 2) return meter
+  return [meter.reduce((top, w) => (w.percent > top.percent ? w : top))]
+}
+
+/** The meter as text for a step. */
+const meterText = (meter: Meter[], step: Step) => windowsFor(meter, step)
+  .map(w => w.label + (step.hasMeterBar ? ' ' + barOf(w.filled) : '') + w.used + (step.hasReset ? w.reset : ''))
+  .join(BETWEEN)
+
+/**
+ * The first step whose row fits in `room` columns: the left part, the engine's hint after it, a gap,
+ * the meter and what is beneath it. Both hooks ask it with the same values, so both draw the same step.
+ */
+export function fitRow (left: Left, meter: Meter[], room: number, hint = 0, beneath = 0): Step {
+  return STEPS.find(step => {
+    const ours = widthOf(partsOf(left, step).join(SEPARATOR))
+    const right = widthOf(meterText(meter, step))
+    const after = hint > 0 ? hint + (ours > 0 ? SEPARATOR.length : 0) : 0
+    const end = beneath > 0 ? beneath + (right > 0 ? SEPARATOR.length : 0) : 0
+    return ours + after + (right + end > 0 ? FOOTER_GAP : 0) + right + end <= room
+  }) ?? (STEPS[GIVE_UP.length] as Step)
+}
+
+/** Columns the footer has on the terminal after the mode label; elsewhere, no limit. */
 function roomOf (e: { surface: string; viewport?: RenderViewport }) {
   if (e.surface !== 'terminal' || e.viewport === undefined) return Infinity
-  return e.viewport.columns - FOOTER_PADDING - FOOTER_GAP - MODE_LABEL - (hintWidth > 0 ? 1 + hintWidth : 0)
+  return e.viewport.columns - FOOTER_PADDING - MODE_ROW
 }
 
 const colorFor = (percent: number) => (percent >= 90 ? 'error' : percent >= 75 ? 'warning' : 'claude')
@@ -211,6 +256,46 @@ function visible (all: Limit[], display: string, index: number): Limit[] {
   return all.filter(limit => limit.kind === WINDOW_OF[display])
 }
 
+/** Which pieces the options turn on, and how the meter displays. */
+type Show = { model: boolean; effort: boolean; git: boolean; context: boolean; usage: boolean; display: string }
+
+/**
+ * What the whole row shows, read by both drawings: the left part and the meter. Reading it subscribes
+ * the drawing to every value, so a change on either side redraws both and they agree on the step.
+ */
+async function rowOf ($: EngineInterface, show: Show): Promise<{ left: Left; meter: Meter[] }> {
+  const [shownName, shownLevel, shownFill, shownGit, all, , now] = await Promise.all([
+    read($, model), read($, effort), read($, context), read($, git), read($, limits), read($, tick), $.clock.now()
+  ])
+  const repo = show.git ? shownGit : null
+  const fill = show.context ? shownFill : null
+  const left: Left = {
+    name: show.model ? shownName : '',
+    level: show.effort ? shownLevel : '',
+    folder: repo === null ? '' : cut(repo.folder, NAME_MAX),
+    branch: repo?.branch ? cut(repo.branch, NAME_MAX) + (repo.isDirty ? '*' : '') : '',
+    percent: fill === null ? '' : `${fill.isEstimate ? '~' : ''}${Math.round(fill.value)}%`,
+    filled: fill === null ? 0 : cellsFor(fill.value),
+    value: fill === null ? 0 : fill.value
+  }
+  if (!show.usage || all.length === 0) return { left, meter: [] }
+  const index = show.display === 'rotate' && all.length >= 2 ? await read($, view) : 0
+  const meter = visible(all, show.display, index).map(limit => {
+    const resetsIn = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt) - now
+    const hasReset = resetsIn !== undefined && resetsIn <= 0
+    const percent = hasReset ? 0 : limit.percentUsed
+    return {
+      kind: limit.kind,
+      label: LABELS[limit.kind] ?? limit.kind,
+      percent,
+      filled: cellsFor(percent),
+      used: ` ${Math.round(percent)}%`,
+      reset: resetsIn !== undefined && !hasReset ? ` ↻ ${until(resetsIn)}` : ''
+    }
+  })
+  return { left, meter }
+}
+
 export const register: Register = (on, options) => {
   seenAt = 0
   windowCount = 0
@@ -226,6 +311,7 @@ export const register: Register = (on, options) => {
   const showContext = options.showContext !== false
   const showUsage = options.showUsage !== false
   const showGit = options.showGit !== false
+  const show: Show = { model: showModelName, effort: showEffort, git: showGit, context: showContext, usage: showUsage, display }
   const hidden = [...(hideCycleHint ? [CYCLE_HINT] : []), ...(hideInterruptHint ? [INTERRUPT_HINT] : [])]
 
   /** The hint line without the parts hidden, and without the empty parts they leave. */
@@ -328,41 +414,22 @@ export const register: Register = (on, options) => {
 
   // Bottom right of the prompt footer: the meter, then what is beneath it (the engine's mode labels,
   // another plugin's switch), so a plugin that draws itself last stays last whichever wraps the other.
-  // Where the row is short the meter gives up its bar, then the time until the reset, then itself.
+  // Where the row is short the meter is the last thing it gives up (fitRow).
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     if (!showUsage) return next(e)
-    const all = await read($, limits)
-    if (all.length === 0) return next(e)
-    const index = display === 'rotate' && all.length >= 2 ? await read($, view) : 0
-    const shown = visible(all, display, index)
-    if (shown.length === 0) return next(e)
-    // Subscribes this drawing to the countdown tick alongside reading the clock and beneath node
-    const [, now, beneath] = await Promise.all([read($, tick), $.clock.now(), next(e)])
+    const [{ left, meter }, beneath] = await Promise.all([rowOf($, show), next(e)])
+    if (meter.length === 0) return beneath
     const hasBeneath = e.props.modes.length > 0 || !isBlank(beneath)
-
-    const windows = shown.map(limit => {
-      const resetsIn = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt) - now
-      const hasReset = resetsIn !== undefined && resetsIn <= 0
-      const percent = hasReset ? 0 : limit.percentUsed
-      const filled = Math.round((Math.min(Math.max(percent, 0), 100) / 100) * CELLS)
-      const label = LABELS[limit.kind] ?? limit.kind
-      const used = ` ${Math.round(percent)}%`
-      const reset = resetsIn !== undefined && !hasReset ? ` ↻ ${until(resetsIn)}` : ''
-      return { kind: limit.kind, label, percent, filled, used, reset, short: widthOf(label + used) }
-    })
-    const below = widthOfNode(beneath, e.props.modes)
-    const hasPlugin = holdsPlugin(beneath)
-    const room = roomOf(e) - (hasBeneath ? below + SEPARATOR.length : 0) - (hasPlugin ? 0 : AROUND)
-    const given = hasPlugin ? Math.max(0, BENEATH_FLOOR - below) : 0
-    const short = windows.reduce((sum, w) => sum + w.short, (windows.length - 1) * BETWEEN.length)
-    const bars = windows.length * (1 + CELLS)
-    const resets = windows.reduce((sum, w) => sum + widthOf(w.reset), 0)
-    const fit = [
-      { hasBar: true, hasReset: true, width: short + bars + resets },
-      { hasBar: false, hasReset: true, width: short + resets },
-      { hasBar: false, hasReset: false, width: short }
-    ].find(({ hasReset, width }) => width <= (hasReset ? room - given : room))
-    if (!fit) return beneath
+    if (e.surface === 'terminal') {
+      const width = hasBeneath ? widthOfNode(beneath, e.props.modes) : 0
+      if (width !== beneathWidth) {
+        beneathWidth = width
+        $.ui.invalidate('ui.render')
+      }
+    }
+    const step = fitRow(left, meter, roomOf(e), hintWidth, beneathWidth)
+    const windows = windowsFor(meter, step)
+    if (windows.length === 0) return beneath
 
     const { Box, Text } = $.ui.resolve(e)
 
@@ -372,10 +439,10 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" key={w.kind}>
             {i > 0 ? <Text dimColor>{BETWEEN}</Text> : null}
             <Text dimColor>{w.label}</Text>
-            {fit.hasBar ? <Text color={colorFor(w.percent)}>{' ' + '━'.repeat(w.filled)}</Text> : null}
-            {fit.hasBar ? <Text dimColor>{'─'.repeat(CELLS - w.filled)}</Text> : null}
+            {step.hasMeterBar ? <Text color={colorFor(w.percent)}>{' ' + '━'.repeat(w.filled)}</Text> : null}
+            {step.hasMeterBar ? <Text dimColor>{'─'.repeat(CELLS - w.filled)}</Text> : null}
             <Text>{w.used}</Text>
-            {fit.hasReset && w.reset ? <Text dimColor>{w.reset}</Text> : null}
+            {step.hasReset && w.reset ? <Text dimColor>{w.reset}</Text> : null}
           </Box>
         ))}
         {hasBeneath ? <Text dimColor>{SEPARATOR}</Text> : null}
@@ -384,54 +451,69 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // Left of the footer, right after the mode label the engine draws: the model, its effort and the
-  // context fill, then the hint line ("(shift+tab to cycle)", "esc to interrupt" while Claude works).
-  // Its width tells the meter at the right how much room is left.
+  // Left of the footer, right after the mode label the engine draws: the model, its effort, the folder
+  // and git branch and the context fill, then the hint line ("(shift+tab to cycle)", "esc to interrupt"
+  // while Claude works). The hint's width tells the meter how much room is left.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     if (e.props.hint !== lastHint) {
       lastHint = e.props.hint
       lastTidied = tidy(e.props.hint)
     }
     const hint = lastTidied
-    const [shownName, shownLevel, shownFill, shownGit] = await Promise.all([read($, model), read($, effort), read($, context), read($, git)])
-    const repo = showGit ? shownGit : null
-    const branch = repo?.branch ? repo.branch + (repo.isDirty ? '*' : '') : ''
-    const where = repo === null ? '' : repo.folder + (branch ? ` git:(${branch})` : '')
-    const name = showModelName ? shownName : ''
-    const level = showEffort ? shownLevel : ''
-    const fill = showContext ? shownFill : null
-    const percent = fill === null ? '' : `${fill.isEstimate ? '~' : ''}${Math.round(fill.value)}%`
-    const filled = fill === null ? 0 : cellsFor(fill.value)
-    const bar = fill === null ? '' : `ctx ${'━'.repeat(filled)}${'─'.repeat(CELLS - filled)} ${percent}`
-    const parts = [name, level, where, bar].filter(Boolean)
     const hasHint = hint.trim() !== ''
     if (e.surface === 'terminal') {
-      const ours = parts.length === 0 ? 0 : widthOf(parts.join(SEPARATOR))
-      const width = widthOf(hint) + ours + (ours > 0 && hasHint ? SEPARATOR.length : 0)
+      const width = hasHint ? widthOf(hint) : 0
       if (width !== hintWidth) {
         hintWidth = width
         $.ui.invalidate('ui.render')
       }
     }
-    const beneath = await (hint === e.props.hint ? next(e) : next({ ...e, props: { ...e.props, hint } }))
-    if (parts.length === 0) return beneath
+    const [{ left, meter }, beneath] = await Promise.all([
+      rowOf($, show),
+      hint === e.props.hint ? next(e) : next({ ...e, props: { ...e.props, hint } })
+    ])
+    const step = fitRow(left, meter, roomOf(e), hintWidth, beneathWidth)
+    const { name, level, folder, branch, percent, filled, value } = left
+    const hasBranch = step.hasBranch && branch !== ''
+    const hasFolder = folder !== '' && (step.hasFolder || (step.hasBranch && branch === ''))
+    const hasContext = step.hasContext && percent !== ''
 
     const { Box, Text } = $.ui.resolve(e)
 
+    const segments = [
+      step.hasModel && name ? <Text color="claude">{name}</Text> : null,
+      step.hasEffort && level ? <Text dimColor>{level}</Text> : null,
+      hasFolder || hasBranch
+        ? (
+          <Box flexDirection="row">
+            {hasFolder ? <Text>{folder}</Text> : null}
+            {hasBranch ? <Text color="merged">{(hasFolder ? ' ' : '') + 'git:('}</Text> : null}
+            {hasBranch ? <Text color="suggestion">{branch}</Text> : null}
+            {hasBranch ? <Text color="merged">)</Text> : null}
+          </Box>
+          )
+        : null,
+      hasContext
+        ? (
+          <Box flexDirection="row">
+            <Text dimColor>ctx </Text>
+            {step.hasContextBar ? <Text color={contextColor(value)}>{'━'.repeat(filled)}</Text> : null}
+            {step.hasContextBar ? <Text dimColor>{'─'.repeat(CELLS - filled) + ' '}</Text> : null}
+            <Text color={step.hasContextBar ? undefined : contextColor(value)}>{percent}</Text>
+          </Box>
+          )
+        : null
+    ].filter(Boolean)
+    if (segments.length === 0) return beneath
+
     return (
       <Box flexDirection="row">
-        {name ? <Text color="claude">{name}</Text> : null}
-        {level ? <Text dimColor>{(name ? SEPARATOR : '') + level}</Text> : null}
-        {where && (name || level) ? <Text dimColor>{SEPARATOR}</Text> : null}
-        {where && repo ? <Text>{repo.folder}</Text> : null}
-        {branch ? <Text color="merged">{' git:('}</Text> : null}
-        {branch ? <Text color="suggestion">{branch}</Text> : null}
-        {branch ? <Text color="merged">)</Text> : null}
-        {fill !== null && (name || level || where) ? <Text dimColor>{SEPARATOR}</Text> : null}
-        {fill !== null ? <Text dimColor>ctx </Text> : null}
-        {fill !== null ? <Text color={contextColor(fill.value)}>{'━'.repeat(filled)}</Text> : null}
-        {fill !== null ? <Text dimColor>{'─'.repeat(CELLS - filled)}</Text> : null}
-        {fill !== null ? <Text>{' ' + percent}</Text> : null}
+        {segments.map((segment, i) => (
+          <Box flexDirection="row" key={String(i)}>
+            {i > 0 ? <Text dimColor>{SEPARATOR}</Text> : null}
+            {segment}
+          </Box>
+        ))}
         {hasHint ? <Text dimColor>{SEPARATOR}</Text> : null}
         {hasHint ? beneath : null}
       </Box>
