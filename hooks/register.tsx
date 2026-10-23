@@ -28,10 +28,12 @@ async function syncGit ($: EngineInterface) {
   isReadingGit = true
   try {
     const cwd = await $.session.cwd()
-    const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 1000 })
-    const branch = head.exitCode === 0 ? head.stdout.trim() : ''
-    const status = branch ? await $.process.run(['git', '--no-optional-locks', 'status', '--porcelain'], { cwd, timeoutMs: 1000 }) : undefined
-    const next: Git = { folder: folderOf(cwd), branch, isDirty: status !== undefined && status.exitCode === 0 && status.stdout.trim() !== '' }
+    // One process for branch and changes: `# branch.head <name>` lines, then one line per change.
+    const status = await $.process.run(['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch'], { cwd, timeoutMs: 1000 })
+    const lines = status.exitCode === 0 ? status.stdout.split('\n') : []
+    const head = lines.find(line => line.startsWith('# branch.head '))?.slice(14).trim() ?? ''
+    const branch = head === '(detached)' ? 'HEAD' : head
+    const next: Git = { folder: folderOf(cwd), branch, isDirty: lines.some(line => line !== '' && !line.startsWith('#')) }
     const key = JSON.stringify(next)
     if (key === lastGit) return
     lastGit = key
@@ -94,8 +96,10 @@ let lastSessionModel = ''
 /** Writes model and effort only when they change, so each request does not redraw the footer. */
 async function showModel ($: EngineInterface, id: string, level: string) {
   const name = prettyModel(id)
-  if (name !== lastModel) { lastModel = name; await update($, model, () => name) }
-  if (level !== lastEffort) { lastEffort = level; await update($, effort, () => level) }
+  const writes: Promise<unknown>[] = []
+  if (name !== lastModel) { lastModel = name; writes.push(update($, model, () => name)) }
+  if (level !== lastEffort) { lastEffort = level; writes.push(update($, effort, () => level)) }
+  await Promise.all(writes)
 }
 
 const WINDOWS = ['five_hour', 'seven_day']
@@ -229,13 +233,18 @@ function until (ms: number) {
 let seenAt = 0
 
 /** Keeps the latest reading for the meter, and for the next session until a response reports again. */
+let lastLimits = ''
+
 async function remember ($: EngineInterface, found: Limit[]) {
   if (found.length === 0) return
-  seenAt = await $.clock.now()
+  const key = JSON.stringify(found)
+  if (key === lastLimits) return
+  lastLimits = key
+  const [now] = await Promise.all([$.clock.now(), update($, limits, () => found)])
+  seenAt = now
   windowCount = found.length
-  await update($, limits, () => found)
-  await $.store.set('limits', found)
-  await $.store.set('at', seenAt) // after the limits, so a reader that sees the new time finds the new limits
+  // Not waited on: nothing drawn depends on it. `at` after the limits, so a reader that sees the new time finds the new limits.
+  void $.store.set('limits', found).then(() => $.store.set('at', now)).catch(() => {})
 }
 
 /** Adopts the reading another session left in the shared store, when it is newer than ours. */
@@ -264,8 +273,10 @@ type Show = { model: boolean; effort: boolean; git: boolean; context: boolean; u
  * the drawing to every value, so a change on either side redraws both and they agree on the step.
  */
 async function rowOf ($: EngineInterface, show: Show): Promise<{ left: Left; meter: Meter[] }> {
-  const [shownName, shownLevel, shownFill, shownGit, all, , now] = await Promise.all([
-    read($, model), read($, effort), read($, context), read($, git), read($, limits), read($, tick), $.clock.now()
+  // `view` in the same round: read after, it cost a second round trip per drawing.
+  const [shownName, shownLevel, shownFill, shownGit, all, , now, shownView] = await Promise.all([
+    read($, model), read($, effort), read($, context), read($, git), read($, limits), read($, tick), $.clock.now(),
+    show.usage && show.display === 'rotate' ? read($, view) : 0
   ])
   const repo = show.git ? shownGit : null
   const fill = show.context ? shownFill : null
@@ -279,7 +290,7 @@ async function rowOf ($: EngineInterface, show: Show): Promise<{ left: Left; met
     value: fill === null ? 0 : fill.value
   }
   if (!show.usage || all.length === 0) return { left, meter: [] }
-  const index = show.display === 'rotate' && all.length >= 2 ? await read($, view) : 0
+  const index = all.length >= 2 ? shownView : 0
   const meter = visible(all, show.display, index).map(limit => {
     const resetsIn = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt) - now
     const hasReset = resetsIn !== undefined && resetsIn <= 0
@@ -330,36 +341,37 @@ export const register: Register = (on, options) => {
     tickTimer = undefined
     rotateTimer?.cancel()
     rotateTimer = undefined
-    const [saved, storedAt, usage] = await Promise.all([
+    lastGit = ''
+    isReadingGit = false
+    if (showGit) void syncGit($).catch(() => {}) // first, and not waited on: the session starts at once
+    lastLimits = ''
+    // Every read in one round trip.
+    const [saved, storedAt, usage, sessionModel, perModel, level] = await Promise.all([
       $.store.get('limits'),
       $.store.get('at'),
-      $.session.usage()
+      $.session.usage(),
+      $.session.model(),
+      $.settings.read({ key: 'modelSettings' }),
+      $.settings.read({ key: 'effortLevel' })
     ])
-    if (Array.isArray(saved)) {
+    seenAt = Number(storedAt) || 0
+    const found = windowsOf(usage.rateLimits)
+    if (found.length === 0 && Array.isArray(saved)) {
       windowCount = saved.length
       await update($, limits, () => saved as Limit[])
     }
-    seenAt = Number(storedAt) || 0
-
-    await remember($, windowsOf(usage.rateLimits))
 
     // Before the first request: the session's model, and the effort the settings give it.
     // shortcut: an effort set with /effort shows from the next request on, as turn.step carries it.
     lastModel = lastEffort = ''
-    lastSessionModel = await $.session.model()
-    const [perModel, level] = await Promise.all([
-      $.settings.read({ key: 'modelSettings' }),
-      $.settings.read({ key: 'effortLevel' })
-    ])
+    lastSessionModel = sessionModel
     const own = (perModel as Record<string, { effortLevel?: unknown }> | undefined)?.[lastSessionModel]?.effortLevel
-    await showModel($, lastSessionModel, String(own ?? level ?? ''))
     compactFor = ''
     lastFill = null
     isCounting = false
-    await syncContext($, usage.context)
-    lastGit = ''
-    isReadingGit = false
-    if (showGit) void syncGit($).catch(() => {}) // git is not waited on: the session starts at once
+    await Promise.all([remember($, found), showModel($, lastSessionModel, String(own ?? level ?? ''))])
+    // The window estimate is not waited on either: the fill shows when it is in.
+    void syncContext($, usage.context).catch(() => {})
 
     if (e.isInteractive) {
       // Another session's reading shows up within TICK_MS of being stored.
